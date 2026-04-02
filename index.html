@@ -117,13 +117,14 @@
 <div id="app">
   <header>
     <h1>🌿 自然保護区設計ゲーム</h1>
-    <p>30マスのフィールドで、限られた30ポイントを使い調査と保護を行いましょう。保護できたマス数×種ポイントの合計が最終スコアです。</p>
+    <p>30マスのフィールドで、限られた30ポイントを使い調査と保護を行いましょう。スコアは<strong>種ごとの捕捉率（保護セル／生息全セル）をポイントで重みづけした加重平均</strong>です。</p>
     <p style="margin-top:8px;font-size:12px;color:#555;line-height:1.8;background:#fff;border:1px solid #d8d4cc;border-radius:6px;padding:10px 14px;">
       <strong>ルール</strong><br>
       ・各種の生息地は必ず<strong>連続したマス</strong>に分布します。飛び地はありません。<br>
-      ・分布が広い種ほど見つけやすいですが、1マス保護したときのポイントは低めです。<br>
-      　種A・B・C（分布10マス）＝<strong>1pt</strong>　／　種D・E・F（分布5マス）＝<strong>2pt</strong>　／　希少種G・H（分布2マス）＝<strong>5pt</strong><br>
-      ・希少種は他の種が3種以上いる場所にしか生息しません。調査すると「?」が表示され、<strong>再調査（2pt）</strong>して初めて在不在が確認できます。
+      ・分布が狭い種ほど希少で重要です。捕捉率への重みが高く設定されています。<br>
+      　種A・B・C（分布10マス）＝重み<strong>1</strong>　／　種D・E・F（分布5マス）＝重み<strong>2</strong>　／　希少種G・H（分布2マス）＝重み<strong>5</strong><br>
+      ・希少種は他の種が3種以上いる場所にしか生息しません。調査すると「?」が表示され、<strong>再調査（2pt）</strong>して初めて在不在が確認できます。<br>
+      ・基準スコアはZonationアルゴリズムを用いて7セルを最適に選んだときの加重平均カバー率です。
     </p>
   </header>
 
@@ -354,50 +355,85 @@ function showResult() {
   const sec = document.getElementById('score-section');
   sec.style.display = 'block';
 
-  let totalScore = 0;
-  const spDetail = [];
-  for (let s=0;s<NUM_SPECIES;s++) {
-    const protCount = protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
-    const spPt = SP_POINTS[s];
-    const contrib = protCount * spPt;
-    totalScore += contrib;
-    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range:speciesMap[s].filter(Boolean).length, spPt, contrib });
-  }
+  const totalWeight = SP_POINTS.reduce((s,w)=>s+w, 0);
 
+  // 種ごとの捕捉率とポイント重みづけ加重平均スコア
+  const spDetail = [];
+  let weightedCovSum = 0;
+  for (let s=0;s<NUM_SPECIES;s++) {
+    const range = speciesMap[s].filter(Boolean).length;
+    const protCount = protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
+    const coverage = range > 0 ? protCount / range : 0;
+    const w = SP_POINTS[s];
+    weightedCovSum += coverage * w;
+    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range, coverage, w });
+  }
+  const playerScore = weightedCovSum / totalWeight; // 0〜1
+
+  // Zonation ABF 貪欲法: 7セルで達成できる最大加重平均カバー率
   const MAX_PROTECT = Math.floor(TOTAL_POINTS / PROTECT_COST);
-  const cellValues = Array.from({length: NUM_CELLS}, (_, c) =>
-    SP_POINTS.reduce((sum, pt, s) => sum + (speciesMap[s][c] ? pt : 0), 0)
-  );
-  const best7 = [...cellValues].sort((a,b)=>b-a).slice(0, MAX_PROTECT);
-  const maxPossible = best7.reduce((s,v)=>s+v, 0);
-  const pct = maxPossible > 0 ? Math.round(totalScore / maxPossible * 100) : 0;
+  const covered = Array(NUM_SPECIES).fill(0); // 各種のカバー済みセル数
+  const ranges = spDetail.map(d => d.range);
+  const selected = new Set();
+  for (let pick=0; pick<MAX_PROTECT; pick++) {
+    let bestVal = -1, bestCell = -1;
+    for (let c=0; c<NUM_CELLS; c++) {
+      if (selected.has(c)) continue;
+      // ABF: 追加したときの加重平均カバー率の増分
+      let val = 0;
+      for (let s=0; s<NUM_SPECIES; s++) {
+        if (speciesMap[s][c] && ranges[s]>0) {
+          val += SP_POINTS[s] * (1 / ranges[s]);
+        }
+      }
+      // marginal gain（すでにカバー済みは除かない単純ABF）
+      if (val > bestVal) { bestVal = val; bestCell = c; }
+    }
+    if (bestCell < 0) break;
+    selected.add(bestCell);
+    for (let s=0; s<NUM_SPECIES; s++) {
+      if (speciesMap[s][bestCell]) covered[s]++;
+    }
+  }
+  let zonationWeightedSum = 0;
+  for (let s=0; s<NUM_SPECIES; s++) {
+    const cov = ranges[s]>0 ? covered[s]/ranges[s] : 0;
+    zonationWeightedSum += cov * SP_POINTS[s];
+  }
+  const maxScore = zonationWeightedSum / totalWeight;
+
+  const pct = maxScore > 0 ? Math.round(playerScore / maxScore * 100) : 0;
+  const playerPct = Math.round(playerScore * 100);
+  const maxPct = Math.round(maxScore * 100);
 
   const [, msgClass, msgText] = (
-    pct>=80 ? ['','good','素晴らしい！調査と保護のトレードオフを見事に克服しました。希少種も確実に保護できています。'] :
-    pct>=60 ? ['','good','優秀な保護計画です！大部分の種を効率よく保護できています。'] :
-    pct>=40 ? ['','mid', 'まずまずの結果。調査に使うポイントと保護範囲のバランスをもう少し工夫しましょう。'] :
-    pct>=20 ? ['','mid', '保護できた範囲はまだ改善の余地があります。'] :
-              ['','low', '調査不足か保護範囲が狭すぎます。次は先に数マス調査して分布を確認してから保護しましょう。']
+    pct>=90 ? ['','good','素晴らしい！Zonation最適解に迫る保護計画です。情報の不確実性の中で最高の判断をしました。'] :
+    pct>=70 ? ['','good','優秀な保護計画です！大部分の種を効率よくカバーできています。'] :
+    pct>=50 ? ['','mid', 'まずまずの結果。調査と保護のポイント配分をもう少し工夫しましょう。'] :
+    pct>=25 ? ['','mid', '保護できた範囲はまだ改善の余地があります。'] :
+              ['','low', '調査不足か保護範囲が狭すぎます。先に数マス調査して分布を把握してから保護しましょう。']
   );
 
   let html = `<h2>📊 評価結果</h2>`;
   html += `<div class="score-stats">`;
-  html += `<div class="stat"><div class="stat-label">合計スコア</div><div class="stat-val ${pct>=60?'green':pct>=30?'amber':'red'}">${totalScore}</div></div>`;
-  html += `<div class="stat"><div class="stat-label">最適7マス比</div><div class="stat-val">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">加重平均カバー率</div><div class="stat-val ${pct>=70?'green':pct>=40?'amber':'red'}">${playerPct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">最適解との比率</div><div class="stat-val">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">最適基準値 (Zonation)</div><div class="stat-val">${maxPct}%</div></div>`;
   html += `<div class="stat"><div class="stat-label">保護マス数</div><div class="stat-val blue">${protected_.filter(Boolean).length}</div></div>`;
   html += `<div class="stat"><div class="stat-label">使用ポイント</div><div class="stat-val">${TOTAL_POINTS-points}</div></div>`;
   html += `</div>`;
 
   html += `<table class="sp-result-table"><thead><tr>`;
-  html += `<th>種名</th><th>種pt</th><th>分布マス数</th><th>保護できたマス</th><th>スコア貢献</th>`;
+  html += `<th>種名</th><th>重み</th><th>分布マス</th><th>保護マス</th><th>捕捉率</th>`;
   html += `</tr></thead><tbody>`;
   for (const d of spDetail) {
+    const covPct = Math.round(d.coverage * 100);
     html += `<tr${d.isRare?' class="rare"':''}>`;
     html += `<td>${d.isRare?'⭐':''}${d.name}</td>`;
-    html += `<td>${d.spPt}pt</td>`;
+    html += `<td>${d.w}</td>`;
     html += `<td>${d.range}マス</td>`;
     html += `<td style="color:${d.protCount>0?'#0a6641':'#a32d2d'};font-weight:500">${d.protCount}マス</td>`;
-    html += `<td style="font-weight:500">${d.contrib}pt</td>`;
+    html += `<td style="font-weight:500">${covPct}%</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table>`;

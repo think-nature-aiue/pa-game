@@ -117,13 +117,14 @@
 <div id="app">
   <header>
     <h1>🌿 Nature Reserve Design Game</h1>
-    <p>Survey and protect a 30-cell field using a limited budget of 30 points. Your final score is the sum of (protected cells × species points) across all species.</p>
+    <p>Survey and protect a 30-cell field using a limited budget of 30 points. Your score is the <strong>weighted mean coverage rate across species</strong> — each species' protected fraction of its range, averaged with weights by rarity.</p>
     <p style="margin-top:8px;font-size:12px;color:#555;line-height:1.8;background:#fff;border:1px solid #d8d4cc;border-radius:6px;padding:10px 14px;">
       <strong>Rules</strong><br>
       · Each species occupies a <strong>contiguous range</strong> of cells — no gaps.<br>
-      · Rarer species (smaller range) are harder to find but worth more points per protected cell.<br>
-      &nbsp;&nbsp;Species A·B·C (range 10) = <strong>1 pt</strong> &nbsp;/&nbsp; Species D·E·F (range 5) = <strong>2 pt</strong> &nbsp;/&nbsp; Rare G·H (range 2) = <strong>5 pt</strong><br>
-      · Rare species only appear where ≥3 other species co-occur. A first survey shows "?" — a <strong>re-survey (2 pt)</strong> is needed to confirm presence.
+      · Rarer species carry higher weights in the coverage score.<br>
+      &nbsp;&nbsp;Species A·B·C (range 10) = weight <strong>1</strong> &nbsp;/&nbsp; Species D·E·F (range 5) = weight <strong>2</strong> &nbsp;/&nbsp; Rare G·H (range 2) = weight <strong>5</strong><br>
+      · Rare species only appear where ≥3 other species co-occur. A first survey shows "?" — a <strong>re-survey (2 pt)</strong> is needed to confirm presence.<br>
+      · The reference score is the maximum weighted mean coverage achievable with 7 protected cells, computed via the <strong>Zonation Additive Benefit Function</strong> (greedy algorithm).
     </p>
   </header>
 
@@ -353,51 +354,83 @@ function showResult() {
   const sec = document.getElementById('score-section');
   sec.style.display = 'block';
 
-  let totalScore = 0;
-  const spDetail = [];
-  for (let s=0;s<NUM_SPECIES;s++) {
-    const protCount = protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
-    const spPt = SP_POINTS[s];
-    const contrib = protCount * spPt;
-    totalScore += contrib;
-    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range:speciesMap[s].filter(Boolean).length, spPt, contrib });
-  }
+  const totalWeight = SP_POINTS.reduce((s,w)=>s+w, 0);
 
-  // Max possible: best 7 cells if all 30 pt spent on protection (30 / 4 = 7)
+  // Per-species coverage rate and weighted mean score
+  const spDetail = [];
+  let weightedCovSum = 0;
+  for (let s=0;s<NUM_SPECIES;s++) {
+    const range = speciesMap[s].filter(Boolean).length;
+    const protCount = protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
+    const coverage = range > 0 ? protCount / range : 0;
+    const w = SP_POINTS[s];
+    weightedCovSum += coverage * w;
+    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range, coverage, w });
+  }
+  const playerScore = weightedCovSum / totalWeight;
+
+  // Zonation ABF greedy: best weighted mean coverage with 7 cells
   const MAX_PROTECT = Math.floor(TOTAL_POINTS / PROTECT_COST);
-  const cellValues = Array.from({length: NUM_CELLS}, (_, c) =>
-    SP_POINTS.reduce((sum, pt, s) => sum + (speciesMap[s][c] ? pt : 0), 0)
-  );
-  const best7 = [...cellValues].sort((a,b)=>b-a).slice(0, MAX_PROTECT);
-  const maxPossible = best7.reduce((s,v)=>s+v, 0);
-  const pct = maxPossible > 0 ? Math.round(totalScore / maxPossible * 100) : 0;
+  const covered = Array(NUM_SPECIES).fill(0);
+  const ranges = spDetail.map(d => d.range);
+  const selected = new Set();
+  for (let pick=0; pick<MAX_PROTECT; pick++) {
+    let bestVal = -1, bestCell = -1;
+    for (let c=0; c<NUM_CELLS; c++) {
+      if (selected.has(c)) continue;
+      let val = 0;
+      for (let s=0; s<NUM_SPECIES; s++) {
+        if (speciesMap[s][c] && ranges[s]>0) {
+          val += SP_POINTS[s] * (1 / ranges[s]);
+        }
+      }
+      if (val > bestVal) { bestVal = val; bestCell = c; }
+    }
+    if (bestCell < 0) break;
+    selected.add(bestCell);
+    for (let s=0; s<NUM_SPECIES; s++) {
+      if (speciesMap[s][bestCell]) covered[s]++;
+    }
+  }
+  let zonationWeightedSum = 0;
+  for (let s=0; s<NUM_SPECIES; s++) {
+    const cov = ranges[s]>0 ? covered[s]/ranges[s] : 0;
+    zonationWeightedSum += cov * SP_POINTS[s];
+  }
+  const maxScore = zonationWeightedSum / totalWeight;
+
+  const pct = maxScore > 0 ? Math.round(playerScore / maxScore * 100) : 0;
+  const playerPct = Math.round(playerScore * 100);
+  const maxPct = Math.round(maxScore * 100);
 
   const [, msgClass, msgText] = (
-    pct>=80 ? ['','good','Excellent! You masterfully balanced surveying and protecting. Even the rare species are covered.'] :
-    pct>=60 ? ['','good','Great plan! Most species are well protected within your reserve.'] :
-    pct>=40 ? ['','mid', 'Decent result. Try fine-tuning the balance between surveying costs and protected area.'] :
-    pct>=20 ? ['','mid', 'There is still room to improve the coverage.'] :
-              ['','low', 'Coverage is too low. Try surveying a few cells first to map distributions before committing to protection.']
+    pct>=90 ? ['','good','Excellent! Your plan nearly matches the Zonation optimum — outstanding decision-making under uncertainty.'] :
+    pct>=70 ? ['','good','Great plan! Most species are well covered within your reserve.'] :
+    pct>=50 ? ['','mid', 'Decent result. Try adjusting the balance between surveying costs and protected area size.'] :
+    pct>=25 ? ['','mid', 'There is still room to improve coverage.'] :
+              ['','low', 'Coverage is too low. Survey a few cells first to map distributions before committing to protection.']
   );
 
   let html = `<h2>📊 Results</h2>`;
   html += `<div class="score-stats">`;
-  html += `<div class="stat"><div class="stat-label">Total score</div><div class="stat-val ${pct>=60?'green':pct>=30?'amber':'red'}">${totalScore}</div></div>`;
-  html += `<div class="stat"><div class="stat-label">% of best possible (7 cells)</div><div class="stat-val">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">Weighted mean coverage</div><div class="stat-val ${pct>=70?'green':pct>=40?'amber':'red'}">${playerPct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">% of Zonation optimum</div><div class="stat-val">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">Zonation reference</div><div class="stat-val">${maxPct}%</div></div>`;
   html += `<div class="stat"><div class="stat-label">Protected cells</div><div class="stat-val blue">${protected_.filter(Boolean).length}</div></div>`;
   html += `<div class="stat"><div class="stat-label">Points used</div><div class="stat-val">${TOTAL_POINTS-points}</div></div>`;
   html += `</div>`;
 
   html += `<table class="sp-result-table"><thead><tr>`;
-  html += `<th>Species</th><th>Pts/cell</th><th>Range (cells)</th><th>Cells protected</th><th>Score contribution</th>`;
+  html += `<th>Species</th><th>Weight</th><th>Range</th><th>Protected cells</th><th>Coverage</th>`;
   html += `</tr></thead><tbody>`;
   for (const d of spDetail) {
+    const covPct = Math.round(d.coverage * 100);
     html += `<tr${d.isRare?' class="rare"':''}>`;
     html += `<td>${d.isRare?'⭐':''}${d.name}</td>`;
-    html += `<td>${d.spPt} pt</td>`;
+    html += `<td>${d.w}</td>`;
     html += `<td>${d.range}</td>`;
     html += `<td style="color:${d.protCount>0?'#0a6641':'#a32d2d'};font-weight:500">${d.protCount}</td>`;
-    html += `<td style="font-weight:500">${d.contrib} pt</td>`;
+    html += `<td style="font-weight:500">${covPct}%</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table>`;
