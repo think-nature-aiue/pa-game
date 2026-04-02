@@ -120,11 +120,13 @@
     <p>30マスのフィールドで、限られた30ポイントを使い調査と保護を行いましょう。スコアは<strong>種ごとの捕捉率（保護セル／生息全セル）をポイントで重みづけした加重平均</strong>です。</p>
     <p style="margin-top:8px;font-size:12px;color:#555;line-height:1.8;background:#fff;border:1px solid #d8d4cc;border-radius:6px;padding:10px 14px;">
       <strong>ルール</strong><br>
-      ・各種の生息地は必ず<strong>連続したマス</strong>に分布します。飛び地はありません。<br>
+      ・各種の生息地は必ず<strong>連続したマス</strong>に分布します（希少種G・Hを除く）。飛び地はありません。<br>
+      ・<strong>希少種G・Hは連続分布ではなく、散在</strong>します。ただし他の種が3種以上いるセルにのみ生息します。<br>
       ・分布が狭い種ほど希少で重要です。捕捉率への重みが高く設定されています。<br>
       　種A・B・C（分布10マス）＝重み<strong>1</strong>　／　種D・E・F（分布5マス）＝重み<strong>2</strong>　／　希少種G・H（分布2マス）＝重み<strong>5</strong><br>
-      ・希少種は他の種が3種以上いる場所にしか生息しません。調査すると「?」が表示され、<strong>再調査（2pt）</strong>して初めて在不在が確認できます。<br>
-      ・基準スコアはZonationアルゴリズムを用いて7セルを最適に選んだときの加重平均カバー率です。
+      ・希少種は調査すると「?」が表示され、<strong>再調査（2pt）</strong>して初めて在不在が確認できます。<br>
+      ・<strong>一切保護できなかった種（捕捉率0%）が1種増えるごとにスコアに×0.75のペナルティ</strong>が累積します。<br>
+      ・基準スコアはZonation ABF（貪欲法）で7セルを最適に選んだときの加重平均カバー率（同ペナルティ適用）です。
     </p>
   </header>
 
@@ -188,15 +190,13 @@ function generateMap() {
   for (let attempt = 0; attempt < 1000; attempt++) {
     const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
 
-    // 通常種: まず0起点で配置し、ランダムオフセットで循環シフト（端でラップアラウンド）
+    // 通常種: ランダムオフセットで循環シフト（ラップアラウンド）
     const offset = Math.floor(Math.random() * NUM_CELLS);
     for (let s = 0; s < 6; s++) {
       const len = ranges[s];
-      // 0〜(NUM_CELLS-len) の範囲でベース位置を決める
       const base = Math.floor(Math.random() * NUM_CELLS);
       for (let i = 0; i < len; i++) {
-        const c = (base + i + offset) % NUM_CELLS;
-        map[s][c] = true;
+        map[s][(base + i + offset) % NUM_CELLS] = true;
       }
     }
 
@@ -207,36 +207,11 @@ function generateMap() {
     }
     if (richCells.length < 4) continue;
 
-    // richCells から連続した区間を抽出（ラップアラウンドを考慮）
-    const runs = [];
-    let run = [richCells[0]];
-    for (let i = 1; i < richCells.length; i++) {
-      if (richCells[i] === richCells[i-1] + 1) {
-        run.push(richCells[i]);
-      } else {
-        runs.push(run);
-        run = [richCells[i]];
-      }
-    }
-    runs.push(run);
-
-    const longRuns = runs.filter(r => r.length >= 2);
-    if (longRuns.length < 1) continue;
-
-    // 希少種G: longRuns[0] に配置
-    const runG = longRuns[0];
-    const startG = runG[Math.floor(Math.random() * (runG.length - 1))];
-    map[6][startG] = true; map[6][startG+1] = true;
-
-    // 希少種H: 別の連続区間、なければ richCells 後半に配置
-    if (longRuns.length >= 2) {
-      const runH = longRuns[longRuns.length - 1];
-      const startH = runH[Math.floor(Math.random() * (runH.length - 1))];
-      map[7][startH] = true; map[7][startH+1] = true;
-    } else {
-      const mid = Math.floor(richCells.length / 2);
-      const c1 = richCells[mid], c2 = richCells[Math.min(mid+1, richCells.length-1)];
-      map[7][c1] = true; map[7][c2] = true;
+    // 希少種G・H: 連続制約なし — richCellsからランダムに2セルずつ独立選択
+    for (const s of RARE_SPECIES) {
+      const shuffled = [...richCells].sort(() => Math.random() - 0.5);
+      map[s][shuffled[0]] = true;
+      map[s][shuffled[1]] = true;
     }
 
     if (RARE_SPECIES.every(s => map[s].some(Boolean))) return map;
@@ -370,23 +345,26 @@ function showResult() {
   }
   const playerScore = weightedCovSum / totalWeight; // 0〜1
 
+  // ペナルティ: 捕捉率0の種数k → score × 0.75^k
+  const zeroCovCount = spDetail.filter(d => d.coverage === 0).length;
+  const penalty = Math.pow(0.75, zeroCovCount);
+  const penalizedScore = playerScore * penalty;
+
   // Zonation ABF 貪欲法: 7セルで達成できる最大加重平均カバー率
   const MAX_PROTECT = Math.floor(TOTAL_POINTS / PROTECT_COST);
-  const covered = Array(NUM_SPECIES).fill(0); // 各種のカバー済みセル数
+  const covered = Array(NUM_SPECIES).fill(0);
   const ranges = spDetail.map(d => d.range);
   const selected = new Set();
   for (let pick=0; pick<MAX_PROTECT; pick++) {
     let bestVal = -1, bestCell = -1;
     for (let c=0; c<NUM_CELLS; c++) {
       if (selected.has(c)) continue;
-      // ABF: 追加したときの加重平均カバー率の増分
       let val = 0;
       for (let s=0; s<NUM_SPECIES; s++) {
         if (speciesMap[s][c] && ranges[s]>0) {
           val += SP_POINTS[s] * (1 / ranges[s]);
         }
       }
-      // marginal gain（すでにカバー済みは除かない単純ABF）
       if (val > bestVal) { bestVal = val; bestCell = c; }
     }
     if (bestCell < 0) break;
@@ -400,10 +378,15 @@ function showResult() {
     const cov = ranges[s]>0 ? covered[s]/ranges[s] : 0;
     zonationWeightedSum += cov * SP_POINTS[s];
   }
-  const maxScore = zonationWeightedSum / totalWeight;
+  const zonationRawScore = zonationWeightedSum / totalWeight;
+  // Zonation基準にも同じペナルティを適用（公平な比較）
+  const zonationZeroCov = Array.from({length:NUM_SPECIES}, (_,s) =>
+    ranges[s]>0 ? covered[s]/ranges[s] : 0
+  ).filter(c => c===0).length;
+  const maxScore = zonationRawScore * Math.pow(0.75, zonationZeroCov);
 
-  const pct = maxScore > 0 ? Math.round(playerScore / maxScore * 100) : 0;
-  const playerPct = Math.round(playerScore * 100);
+  const pct = maxScore > 0 ? Math.round(penalizedScore / maxScore * 100) : 0;
+  const playerPct = Math.round(penalizedScore * 100);
   const maxPct = Math.round(maxScore * 100);
 
   const [, msgClass, msgText] = (
@@ -416,9 +399,9 @@ function showResult() {
 
   let html = `<h2>📊 評価結果</h2>`;
   html += `<div class="score-stats">`;
-  html += `<div class="stat"><div class="stat-label">加重平均カバー率</div><div class="stat-val ${pct>=70?'green':pct>=40?'amber':'red'}">${playerPct}%</div></div>`;
-  html += `<div class="stat"><div class="stat-label">最適解との比率</div><div class="stat-val">${pct}%</div></div>`;
-  html += `<div class="stat"><div class="stat-label">最適基準値 (Zonation)</div><div class="stat-val">${maxPct}%</div></div>`;
+  html += `<div class="stat" style="border:2px solid #c0392b"><div class="stat-label" style="color:#c0392b;font-weight:500">カバー率スコア${zeroCovCount>0?` (×0.75^${zeroCovCount})`:''}</div><div class="stat-val red">${playerPct}%</div></div>`;
+  html += `<div class="stat" style="border:2px solid #c0392b"><div class="stat-label" style="color:#c0392b;font-weight:500">最適達成率</div><div class="stat-val red">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">Zonation基準値</div><div class="stat-val">${maxPct}%</div></div>`;
   html += `<div class="stat"><div class="stat-label">保護マス数</div><div class="stat-val blue">${protected_.filter(Boolean).length}</div></div>`;
   html += `<div class="stat"><div class="stat-label">使用ポイント</div><div class="stat-val">${TOTAL_POINTS-points}</div></div>`;
   html += `</div>`;
@@ -428,12 +411,13 @@ function showResult() {
   html += `</tr></thead><tbody>`;
   for (const d of spDetail) {
     const covPct = Math.round(d.coverage * 100);
-    html += `<tr${d.isRare?' class="rare"':''}>`;
-    html += `<td>${d.isRare?'⭐':''}${d.name}</td>`;
+    const zeroStyle = d.coverage===0 ? ' style="background:#fdf0f0"' : '';
+    html += `<tr${d.isRare?' class="rare"':''}${zeroStyle}>`;
+    html += `<td>${d.isRare?'⭐':''}${d.name}${d.coverage===0?' ⚠':''}</td>`;
     html += `<td>${d.w}</td>`;
     html += `<td>${d.range}マス</td>`;
     html += `<td style="color:${d.protCount>0?'#0a6641':'#a32d2d'};font-weight:500">${d.protCount}マス</td>`;
-    html += `<td style="font-weight:500">${covPct}%</td>`;
+    html += `<td style="font-weight:500;color:${d.coverage===0?'#a32d2d':'inherit'}">${covPct}%${d.coverage===0?' (ペナルティ)':''}</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table>`;
