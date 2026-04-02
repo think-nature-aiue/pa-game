@@ -121,12 +121,12 @@
     <p style="margin-top:8px;font-size:12px;color:#555;line-height:1.8;background:#fff;border:1px solid #d8d4cc;border-radius:6px;padding:10px 14px;">
       <strong>Rules</strong><br>
       · Each species occupies a <strong>contiguous range</strong> of cells — no gaps (except rare species).<br>
-      · <strong>Rare species G and H are not contiguous</strong> — their 2 cells are scattered independently, but only where ≥3 other species co-occur.<br>
+      · <strong>Rare species G and H have 0–4 cells</strong> each in this field (never exactly 1). If 0, they are excluded from scoring.<br>
       · Rarer species carry higher weights in the coverage score.<br>
-      &nbsp;&nbsp;Species A·B·C (range 10) = weight <strong>1</strong> &nbsp;/&nbsp; Species D·E·F (range 5) = weight <strong>2</strong> &nbsp;/&nbsp; Rare G·H (range 2) = weight <strong>5</strong><br>
+      &nbsp;&nbsp;Species A·B·C (range 10) = weight <strong>1</strong> &nbsp;/&nbsp; Species D·E·F (range 5) = weight <strong>2</strong> &nbsp;/&nbsp; Rare G·H (range 0–4) = weight <strong>5</strong><br>
       · A first survey of a rare-species cell shows "?" — a <strong>re-survey (2 pt)</strong> is needed to confirm presence.<br>
-      · <strong>For each species with 0% coverage, a ×0.75 penalty multiplies the score</strong> (cumulative per uncovered species).<br>
-      · The reference score is the maximum weighted mean coverage (with same penalty) achievable with 7 cells, via <strong>Zonation Additive Benefit Function</strong> (greedy).
+      · <strong>For each species present but with 0% coverage, a ×0.75 penalty multiplies the score</strong> (cumulative; absent rare species excluded).<br>
+      · The reference score is the maximum weighted mean coverage (same penalty applied) achievable with 7 cells, via <strong>Zonation Additive Benefit Function</strong> (greedy).
     </p>
   </header>
 
@@ -180,48 +180,50 @@ const TOTAL_POINTS = 30;
 const RARE_SPECIES = [6, 7];
 const RARE_THRESHOLD = 3;
 const SURVEY_RARE_REQUIRED = 2;
+const PENALTY_FACTOR = 0.75;
 const SP_POINTS = [1,1,1,2,2,2,5,5];
 const spNames = ["Sp. A","Sp. B","Sp. C","Sp. D","Sp. E","Sp. F","Rare G","Rare H"];
 
 let points, surveyCounts, protected_, revealed, mode, speciesMap;
 
 function generateMap() {
-  const ranges = [10,10,10,5,5,5,2,2];
+  const ranges = [10,10,10,5,5,5];
   for (let attempt = 0; attempt < 1000; attempt++) {
     const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
 
-    // Place normal species with a random wrap-around offset so richness isn't biased toward centre
+    // Place normal species with a random wrap-around offset
     const offset = Math.floor(Math.random() * NUM_CELLS);
     for (let s = 0; s < 6; s++) {
       const len = ranges[s];
       const base = Math.floor(Math.random() * NUM_CELLS);
       for (let i = 0; i < len; i++) {
-        const c = (base + i + offset) % NUM_CELLS;
-        map[s][c] = true;
+        map[s][(base + i + offset) % NUM_CELLS] = true;
       }
     }
 
-    // 通常種が3種以上重なるセルを列挙
+    // Find cells where ≥3 normal species co-occur
     const richCells = [];
     for (let c = 0; c < NUM_CELLS; c++) {
       if (map.slice(0,6).filter(row => row[c]).length >= RARE_THRESHOLD) richCells.push(c);
     }
     if (richCells.length < 4) continue;
 
-    // Rare species G & H: no contiguity constraint — pick 2 random richCells each
+    // Rare species G & H: 0–4 cells each, scattered (no contiguity), excluded from scoring if 0
     for (const s of RARE_SPECIES) {
+      const rareCount = [0, 2, 3, 4][Math.floor(Math.random() * 4)]; // 0, 2, 3, or 4
+      if (rareCount === 0) continue;
       const shuffled = [...richCells].sort(() => Math.random() - 0.5);
-      map[s][shuffled[0]] = true;
-      map[s][shuffled[1]] = true;
+      for (let i = 0; i < Math.min(rareCount, shuffled.length); i++) {
+        map[s][shuffled[i]] = true;
+      }
     }
 
-    if (RARE_SPECIES.every(s => map[s].some(Boolean))) return map;
+    return map; // valid even if rare species have 0 cells
   }
 
   // Fallback
   const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
   [10,10,10,5,5,5].forEach((len,s) => { for(let c=s*3;c<s*3+len&&c<NUM_CELLS;c++) map[s][c]=true; });
-  for(let c=10;c<12;c++) { map[6][c]=true; map[7][c]=true; }
   return map;
 }
 
@@ -333,25 +335,27 @@ function showResult() {
 
   const totalWeight = SP_POINTS.reduce((s,w)=>s+w, 0);
 
-  // Per-species coverage rate and weighted mean score
+  // Per-species coverage rate and weighted mean score (absent rare species excluded)
   const spDetail = [];
   let weightedCovSum = 0;
+  let activeWeight = 0;
   for (let s=0;s<NUM_SPECIES;s++) {
     const range = speciesMap[s].filter(Boolean).length;
-    const protCount = protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
-    const coverage = range > 0 ? protCount / range : 0;
+    const absent = range === 0;
+    const protCount = absent ? 0 : protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
+    const coverage = absent ? null : protCount / range;
     const w = SP_POINTS[s];
-    weightedCovSum += coverage * w;
-    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range, coverage, w });
+    if (!absent) { weightedCovSum += coverage * w; activeWeight += w; }
+    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range, coverage, absent, w });
   }
-  const playerScore = weightedCovSum / totalWeight;
+  const playerScore = activeWeight > 0 ? weightedCovSum / activeWeight : 0;
 
-  // Penalty: for each species with 0% coverage, multiply score by 0.75
-  const zeroCovCount = spDetail.filter(d => d.coverage === 0).length;
-  const penalty = Math.pow(0.75, zeroCovCount);
+  // Penalty: ×0.75 per species present but with 0% coverage
+  const zeroCovCount = spDetail.filter(d => !d.absent && d.coverage === 0).length;
+  const penalty = Math.pow(PENALTY_FACTOR, zeroCovCount);
   const penalizedScore = playerScore * penalty;
 
-  // Zonation ABF greedy: best weighted mean coverage with 7 cells
+  // Zonation ABF greedy: best weighted mean coverage with 7 cells (absent species excluded)
   const MAX_PROTECT = Math.floor(TOTAL_POINTS / PROTECT_COST);
   const covered = Array(NUM_SPECIES).fill(0);
   const ranges = spDetail.map(d => d.range);
@@ -362,7 +366,7 @@ function showResult() {
       if (selected.has(c)) continue;
       let val = 0;
       for (let s=0; s<NUM_SPECIES; s++) {
-        if (speciesMap[s][c] && ranges[s]>0) {
+        if (!spDetail[s].absent && speciesMap[s][c] && ranges[s]>0) {
           val += SP_POINTS[s] * (1 / ranges[s]);
         }
       }
@@ -370,21 +374,18 @@ function showResult() {
     }
     if (bestCell < 0) break;
     selected.add(bestCell);
-    for (let s=0; s<NUM_SPECIES; s++) {
-      if (speciesMap[s][bestCell]) covered[s]++;
-    }
+    for (let s=0; s<NUM_SPECIES; s++) { if (speciesMap[s][bestCell]) covered[s]++; }
   }
   let zonationWeightedSum = 0;
   for (let s=0; s<NUM_SPECIES; s++) {
-    const cov = ranges[s]>0 ? covered[s]/ranges[s] : 0;
-    zonationWeightedSum += cov * SP_POINTS[s];
+    if (spDetail[s].absent) continue;
+    zonationWeightedSum += (covered[s]/ranges[s]) * SP_POINTS[s];
   }
-  const zonationRawScore = zonationWeightedSum / totalWeight;
-  // Apply same penalty to Zonation reference for fair comparison
-  const zonationZeroCov = Array.from({length:NUM_SPECIES}, (_,s) =>
-    ranges[s]>0 ? covered[s]/ranges[s] : 0
-  ).filter(c => c===0).length;
-  const maxScore = zonationRawScore * Math.pow(0.75, zonationZeroCov);
+  const zonationRawScore = activeWeight > 0 ? zonationWeightedSum / activeWeight : 0;
+  const zonationZeroCov = spDetail.filter((_,s) =>
+    !spDetail[s].absent && ranges[s]>0 && covered[s]===0
+  ).length;
+  const maxScore = zonationRawScore * Math.pow(PENALTY_FACTOR, zonationZeroCov);
 
   const pct = maxScore > 0 ? Math.round(penalizedScore / maxScore * 100) : 0;
   const playerPct = Math.round(penalizedScore * 100);
@@ -400,7 +401,7 @@ function showResult() {
 
   let html = `<h2>📊 Results</h2>`;
   html += `<div class="score-stats">`;
-  html += `<div class="stat" style="border:2px solid #c0392b"><div class="stat-label" style="color:#c0392b;font-weight:500">Coverage score${zeroCovCount>0?` (×0.75^${zeroCovCount})`:''}</div><div class="stat-val red">${playerPct}%</div></div>`;
+  html += `<div class="stat" style="border:2px solid #c0392b"><div class="stat-label" style="color:#c0392b;font-weight:500">Coverage score${zeroCovCount>0?` (×${PENALTY_FACTOR}^${zeroCovCount})`:''}</div><div class="stat-val red">${playerPct}%</div></div>`;
   html += `<div class="stat" style="border:2px solid #c0392b"><div class="stat-label" style="color:#c0392b;font-weight:500">Optimum attainment</div><div class="stat-val red">${pct}%</div></div>`;
   html += `<div class="stat"><div class="stat-label">Zonation reference</div><div class="stat-val">${maxPct}%</div></div>`;
   html += `<div class="stat"><div class="stat-label">Protected cells</div><div class="stat-val blue">${protected_.filter(Boolean).length}</div></div>`;
@@ -411,14 +412,16 @@ function showResult() {
   html += `<th>Species</th><th>Weight</th><th>Range</th><th>Protected cells</th><th>Coverage</th>`;
   html += `</tr></thead><tbody>`;
   for (const d of spDetail) {
-    const covPct = Math.round(d.coverage * 100);
-    const zeroStyle = d.coverage===0 ? ' style="background:#fdf0f0"' : '';
-    html += `<tr${d.isRare?' class="rare"':''}${zeroStyle}>`;
-    html += `<td>${d.isRare?'⭐':''}${d.name}${d.coverage===0?' ⚠':''}</td>`;
-    html += `<td>${d.w}</td>`;
-    html += `<td>${d.range}</td>`;
-    html += `<td style="color:${d.protCount>0?'#0a6641':'#a32d2d'};font-weight:500">${d.protCount}</td>`;
-    html += `<td style="font-weight:500;color:${d.coverage===0?'#a32d2d':'inherit'}">${covPct}%${d.coverage===0?' (penalty)':''}</td>`;
+    const covPct = d.absent ? null : Math.round(d.coverage * 100);
+    const isZero = !d.absent && d.coverage === 0;
+    const zeroStyle = isZero ? ' style="background:#fdf0f0"' : '';
+    const absentStyle = d.absent ? ' style="background:#f5f5f5;color:#bbb"' : '';
+    html += `<tr${d.isRare?' class="rare"':''}${zeroStyle}${absentStyle}>`;
+    html += `<td>${d.isRare?'⭐':''}${d.name}${isZero?' ⚠':''}</td>`;
+    html += `<td>${d.absent?'—':d.w}</td>`;
+    html += `<td>${d.absent?'absent':d.range}</td>`;
+    html += `<td style="color:${d.absent?'#bbb':d.protCount>0?'#0a6641':'#a32d2d'};font-weight:500">${d.absent?'—':d.protCount}</td>`;
+    html += `<td style="font-weight:500;color:${d.absent?'#bbb':isZero?'#a32d2d':'inherit'}">${d.absent?'n/a':covPct+'%'+(isZero?' (penalty)':'')}</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table>`;
