@@ -139,7 +139,6 @@
   <div class="mode-bar">
     <button class="mode-btn active survey" id="btn-survey"  onclick="setMode('survey')">🔍 調査モード（1pt）</button>
     <button class="mode-btn protect"        id="btn-protect" onclick="setMode('protect')">🛡 保護モード（4pt）</button>
-    <button class="mode-btn remove"         id="btn-remove"  onclick="setMode('remove')" style="display: none;">✕ 保護解除</button>
   </div>
 
   <div class="legend">
@@ -188,10 +187,16 @@ function generateMap() {
   for (let attempt = 0; attempt < 1000; attempt++) {
     const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
 
+    // 通常種: まず0起点で配置し、ランダムオフセットで循環シフト（端でラップアラウンド）
+    const offset = Math.floor(Math.random() * NUM_CELLS);
     for (let s = 0; s < 6; s++) {
       const len = ranges[s];
-      const start = Math.floor(Math.random() * (NUM_CELLS - len + 1));
-      for (let c = start; c < start + len; c++) map[s][c] = true;
+      // 0〜(NUM_CELLS-len) の範囲でベース位置を決める
+      const base = Math.floor(Math.random() * NUM_CELLS);
+      for (let i = 0; i < len; i++) {
+        const c = (base + i + offset) % NUM_CELLS;
+        map[s][c] = true;
+      }
     }
 
     // 通常種が3種以上重なるセルを列挙
@@ -201,7 +206,7 @@ function generateMap() {
     }
     if (richCells.length < 4) continue;
 
-    // richCells から連続した区間を抽出
+    // richCells から連続した区間を抽出（ラップアラウンドを考慮）
     const runs = [];
     let run = [richCells[0]];
     for (let i = 1; i < richCells.length; i++) {
@@ -236,7 +241,7 @@ function generateMap() {
     if (RARE_SPECIES.every(s => map[s].some(Boolean))) return map;
   }
 
-  // フォールバック (到達することはほぼない)
+  // フォールバック
   const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
   [10,10,10,5,5,5].forEach((len,s) => { for(let c=s*3;c<s*3+len&&c<NUM_CELLS;c++) map[s][c]=true; });
   for(let c=10;c<12;c++) { map[6][c]=true; map[7][c]=true; }
@@ -261,13 +266,12 @@ function setMode(m) {
   const tips = {
     survey:  '💡 調査モード: マスをクリックすると種の在不在を調べます（1pt）。希少種は2回調査が必要です。',
     protect: '💡 保護モード: マスをクリックして保護区に指定します（4pt）。',
-    remove:  '💡 保護解除モード: クリックで保護指定を外せます（ポイントは戻りません）。'
   };
   document.getElementById('tip-text').textContent = tips[m];
 }
 
 function updateModeBtns() {
-  ['survey','protect','remove'].forEach(id => {
+  ['survey','protect'].forEach(id => {
     const btn = document.getElementById('btn-'+id);
     btn.className = 'mode-btn' + (mode===id ? ' active '+id : ' '+id);
   });
@@ -299,10 +303,6 @@ function clickCell(c) {
     points -= PROTECT_COST;
     protected_[c] = true;
     showMsg(`マス${c+1}を保護区に指定しました。`, 'info');
-  } else {
-    if (!protected_[c]) { showMsg(`マス${c+1}は保護指定されていません。`, 'warn'); return; }
-    protected_[c] = false;
-    showMsg(`マス${c+1}の保護指定を解除しました。`, 'warn');
   }
   render();
 }
@@ -364,8 +364,13 @@ function showResult() {
     spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range:speciesMap[s].filter(Boolean).length, spPt, contrib });
   }
 
-  const maxPossible = spDetail.reduce((n,d)=>n+d.range*d.spPt, 0);
-  const pct = Math.round(totalScore / maxPossible * 100);
+  const MAX_PROTECT = Math.floor(TOTAL_POINTS / PROTECT_COST);
+  const cellValues = Array.from({length: NUM_CELLS}, (_, c) =>
+    SP_POINTS.reduce((sum, pt, s) => sum + (speciesMap[s][c] ? pt : 0), 0)
+  );
+  const best7 = [...cellValues].sort((a,b)=>b-a).slice(0, MAX_PROTECT);
+  const maxPossible = best7.reduce((s,v)=>s+v, 0);
+  const pct = maxPossible > 0 ? Math.round(totalScore / maxPossible * 100) : 0;
 
   const [, msgClass, msgText] = (
     pct>=80 ? ['','good','素晴らしい！調査と保護のトレードオフを見事に克服しました。希少種も確実に保護できています。'] :
@@ -378,7 +383,7 @@ function showResult() {
   let html = `<h2>📊 評価結果</h2>`;
   html += `<div class="score-stats">`;
   html += `<div class="stat"><div class="stat-label">合計スコア</div><div class="stat-val ${pct>=60?'green':pct>=30?'amber':'red'}">${totalScore}</div></div>`;
-  html += `<div class="stat"><div class="stat-label">理論最高値比</div><div class="stat-val">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">最適7マス比</div><div class="stat-val">${pct}%</div></div>`;
   html += `<div class="stat"><div class="stat-label">保護マス数</div><div class="stat-val blue">${protected_.filter(Boolean).length}</div></div>`;
   html += `<div class="stat"><div class="stat-label">使用ポイント</div><div class="stat-val">${TOTAL_POINTS-points}</div></div>`;
   html += `</div>`;
