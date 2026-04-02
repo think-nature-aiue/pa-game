@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nature Reserve Design Game</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Source+Sans+3:wght@400;500;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Source Sans 3', sans-serif; background: #f4f1eb; color: #1a1a18; min-height: 100vh; }
+  #app { max-width: 1100px; margin: 0 auto; padding: 24px 16px 60px; }
+
+  header { margin-bottom: 20px; }
+  header h1 { font-family: 'Space Mono', monospace; font-size: 22px; font-weight: 700; color: #1a1a18; }
+  header p { font-size: 13px; color: #666; margin-top: 4px; line-height: 1.6; }
+
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat { background: #fff; border: 1px solid #d8d4cc; border-radius: 8px; padding: 10px 16px; min-width: 90px; }
+  .stat-label { font-size: 11px; color: #888; margin-bottom: 3px; }
+  .stat-val { font-size: 24px; font-family: 'Space Mono', monospace; font-weight: 700; }
+  .stat-val.green { color: #1D9E75; }
+  .stat-val.amber { color: #BA7517; }
+  .stat-val.red { color: #c0392b; }
+  .stat-val.blue { color: #185FA5; }
+
+  .mode-bar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .mode-btn { padding: 6px 16px; font-size: 13px; font-family: 'Source Sans 3', sans-serif; border-radius: 20px; border: 1px solid #c0bbb0; cursor: pointer; background: #fff; color: #444; transition: all 0.12s; }
+  .mode-btn:hover { background: #eee; }
+  .mode-btn.active.survey  { background: #1D9E75; border-color: #1D9E75; color: #fff; }
+  .mode-btn.active.protect { background: #185FA5; border-color: #185FA5; color: #fff; }
+  .mode-btn.active.remove  { background: #c0392b; border-color: #c0392b; color: #fff; }
+
+  .legend { font-size: 12px; color: #777; margin-bottom: 8px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+  /* Shared scroll container: cells + table scroll together */
+  .field-wrap { overflow-x: auto; padding-bottom: 8px; }
+  .field-inner { display: inline-block; min-width: max-content; }
+
+  /* Cell row — left offset matches species label column (100px) */
+  .cell-row { display: flex; gap: 0; padding-left: 100px; margin-bottom: 4px; }
+
+  .cell {
+    width: 30px; height: 44px; flex-shrink: 0;
+    border-top: 1.5px solid #c8c3ba;
+    border-right: 1.5px solid #c8c3ba;
+    border-bottom: 1.5px solid #c8c3ba;
+    border-left: none;
+    background: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    color: #aaa;
+    transition: background 0.1s, border-color 0.1s, transform 0.08s;
+    user-select: none;
+  }
+  .cell:first-child { border-left: 1.5px solid #c8c3ba; }
+  .cell:hover { transform: translateY(-2px); z-index: 1; border-color: #888; }
+  .cell:active { transform: translateY(0); }
+  .cell.surveyed  { background: #e8f7f1; border-color: #1D9E75; color: #0a6641; }
+  .cell.protected { background: #ddeaf8; border-color: #185FA5; }
+  .cell.protected.surveyed { background: #cce0f2; border-color: #0C447C; }
+  .cell-num  { font-size: 8px; line-height: 1; color: inherit; }
+  .cell-icon { font-size: 13px; line-height: 1; margin-top: 1px; }
+
+  /* Species table — fixed layout so column widths match cell widths exactly */
+  .sp-table { border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+  .sp-table th, .sp-table td { border: 1px solid #d8d4cc; padding: 3px 0; text-align: center; width: 30px; overflow: hidden; }
+  .sp-table .sp-name { width: 100px; min-width: 100px; text-align: left; padding: 3px 6px; font-family: 'Source Sans 3', sans-serif; font-size: 10px; background: #f8f6f2; white-space: nowrap; }
+  .sp-table thead .sp-name { font-weight: 500; background: #f0ece4; font-size: 11px; }
+  .sp-table tr.rare .sp-name { background: #fff8ec; }
+  .sp-present { color: #0a6641; font-weight: 700; }
+  .sp-absent  { color: #bbb; }
+  .sp-maybe   { color: #BA7517; }
+  .sp-none    { color: #ddd; }
+
+  #msg-area { min-height: 34px; margin: 6px 0; }
+  .msg { font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid; display: inline-block; }
+  .msg.info  { background: #e8f7f1; border-color: #1D9E75; color: #0a6641; }
+  .msg.warn  { background: #fff8ec; border-color: #EF9F27; color: #7a4f00; }
+  .msg.error { background: #fdf0f0; border-color: #e74c3c; color: #a32d2d; }
+
+  .table-label { font-size: 12px; font-weight: 500; color: #555; margin: 10px 0 4px; }
+
+  .action-row { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .btn { padding: 8px 20px; font-size: 13px; font-family: 'Source Sans 3', sans-serif; border-radius: 6px; border: 1px solid #c0bbb0; cursor: pointer; background: #fff; color: #444; transition: all 0.12s; }
+  .btn:hover   { background: #eee; }
+  .btn.primary { background: #1a1a18; border-color: #1a1a18; color: #fff; }
+  .btn.primary:hover { background: #333; }
+
+  .tip { font-size: 12px; color: #888; margin-top: 10px; line-height: 1.6; }
+
+  .score-section { margin-top: 24px; background: #fff; border: 1px solid #d8d4cc; border-radius: 10px; padding: 20px; }
+  .score-section h2 { font-family: 'Space Mono', monospace; font-size: 18px; margin-bottom: 14px; }
+  .score-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .score-msg { font-size: 13px; padding: 10px 14px; border-radius: 6px; border: 1px solid; margin-top: 12px; line-height: 1.7; }
+  .score-msg.good { background: #e8f7f1; border-color: #1D9E75; color: #0a6641; }
+  .score-msg.mid  { background: #fff8ec; border-color: #EF9F27; color: #7a4f00; }
+  .score-msg.low  { background: #fdf0f0; border-color: #e74c3c; color: #a32d2d; }
+  .sp-result-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  .sp-result-table th, .sp-result-table td { border: 1px solid #d8d4cc; padding: 5px 8px; text-align: center; }
+  .sp-result-table th { background: #f0ece4; font-weight: 500; }
+  .sp-result-table td:first-child { text-align: left; }
+  .sp-result-table tr.rare { background: #fff8ec; }
+
+  .truth-label { font-size: 12px; font-weight: 500; color: #555; margin: 18px 0 4px; }
+  .truth-wrap  { overflow-x: auto; }
+  .truth-table { border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+  .truth-table th, .truth-table td { border: 1px solid #d8d4cc; padding: 3px 0; text-align: center; width: 30px; }
+  .truth-table .sp-name { width: 100px; min-width: 100px; text-align: left; padding: 3px 6px; font-size: 10px; background: #f8f6f2; white-space: nowrap; }
+  .truth-table thead .sp-name { font-weight: 500; background: #f0ece4; font-size: 11px; }
+  .truth-table tr.rare .sp-name { background: #fff8ec; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🌿 Nature Reserve Design Game</h1>
+    <p>Survey and protect a 30-cell field using a limited budget of 30 points. Your final score is the sum of (protected cells × species points) across all species.</p>
+    <p style="margin-top:8px;font-size:12px;color:#555;line-height:1.8;background:#fff;border:1px solid #d8d4cc;border-radius:6px;padding:10px 14px;">
+      <strong>Rules</strong><br>
+      · Each species occupies a <strong>contiguous range</strong> of cells — no gaps.<br>
+      · Rarer species (smaller range) are harder to find but worth more points per protected cell.<br>
+      &nbsp;&nbsp;Species A·B·C (range 10) = <strong>1 pt</strong> &nbsp;/&nbsp; Species D·E·F (range 5) = <strong>2 pt</strong> &nbsp;/&nbsp; Rare G·H (range 2) = <strong>5 pt</strong><br>
+      · Rare species only appear where ≥3 other species co-occur. A first survey shows "?" — a <strong>re-survey (2 pt)</strong> is needed to confirm presence.
+    </p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Points left</div><div class="stat-val green" id="pts">30</div></div>
+    <div class="stat"><div class="stat-label">Survey cost</div><div class="stat-val amber">1 pt</div></div>
+    <div class="stat"><div class="stat-label">Re-survey cost</div><div class="stat-val amber">2 pt</div></div>
+    <div class="stat"><div class="stat-label">Protect cost</div><div class="stat-val blue">4 pt</div></div>
+    <div class="stat"><div class="stat-label">Protected cells</div><div class="stat-val blue" id="prot-count">0</div></div>
+    <div class="stat"><div class="stat-label">Species confirmed</div><div class="stat-val green" id="conf-sp">0/8</div></div>
+  </div>
+
+  <div class="mode-bar">
+    <button class="mode-btn active survey" id="btn-survey"  onclick="setMode('survey')">🔍 Survey mode (1 pt)</button>
+    <button class="mode-btn protect"        id="btn-protect" onclick="setMode('protect')">🛡 Protect mode (4 pt)</button>
+    <button class="mode-btn remove"         id="btn-remove"  onclick="setMode('remove')" style="display: none;">✕ Remove protection</button>
+  </div>
+
+  <div class="legend">
+    <span><span class="dot" style="background:#1D9E75"></span>Surveyed</span>
+    <span><span class="dot" style="background:#185FA5"></span>Protected</span>
+    <span><span class="dot" style="background:#c8c3ba"></span>Unsurveyed</span>
+  </div>
+
+  <div id="msg-area"></div>
+
+  <div class="field-wrap">
+    <div class="field-inner">
+      <div class="cell-row" id="cell-row"></div>
+      <div class="table-label">Species presence (○=present / ×=absent / ?=re-survey needed / -=unsurveyed)　⭐ = rare species</div>
+      <div id="table-wrap"></div>
+    </div>
+  </div>
+
+  <div class="action-row">
+    <button class="btn primary" onclick="showResult()">📊 Evaluate results</button>
+    <button class="btn" onclick="resetGame()">↺ Reset</button>
+  </div>
+
+  <p class="tip" id="tip-text">💡 Survey a few cells first to map out the distributions, then protect efficiently. Rare species require 2 surveys to confirm.</p>
+
+  <div class="score-section" id="score-section" style="display:none"></div>
+</div>
+
+<script>
+const NUM_CELLS = 30;
+const NUM_SPECIES = 8;
+const SURVEY_COST = 1;       // 通常調査コスト（1回目）
+const SURVEY_RARE_COST = 2;  // 希少種確認のための2回目調査コスト ★変更はここ
+const PROTECT_COST = 4;
+const TOTAL_POINTS = 30;
+const RARE_SPECIES = [6, 7];
+const RARE_THRESHOLD = 3;
+const SURVEY_RARE_REQUIRED = 2;
+const SP_POINTS = [1,1,1,2,2,2,5,5];
+const spNames = ["Sp. A","Sp. B","Sp. C","Sp. D","Sp. E","Sp. F","Rare G","Rare H"];
+
+let points, surveyCounts, protected_, revealed, mode, speciesMap;
+
+function generateMap() {
+  const ranges = [10,10,10,5,5,5,2,2];
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
+
+    for (let s = 0; s < 6; s++) {
+      const len = ranges[s];
+      const start = Math.floor(Math.random() * (NUM_CELLS - len + 1));
+      for (let c = start; c < start + len; c++) map[s][c] = true;
+    }
+
+    // 通常種が3種以上重なるセルを列挙
+    const richCells = [];
+    for (let c = 0; c < NUM_CELLS; c++) {
+      if (map.slice(0,6).filter(row => row[c]).length >= RARE_THRESHOLD) richCells.push(c);
+    }
+    if (richCells.length < 4) continue;
+
+    // richCells から連続した区間を抽出
+    const runs = [];
+    let run = [richCells[0]];
+    for (let i = 1; i < richCells.length; i++) {
+      if (richCells[i] === richCells[i-1] + 1) {
+        run.push(richCells[i]);
+      } else {
+        runs.push(run);
+        run = [richCells[i]];
+      }
+    }
+    runs.push(run);
+
+    const longRuns = runs.filter(r => r.length >= 2);
+    if (longRuns.length < 1) continue;
+
+    // 希少種G: longRuns[0] に配置
+    const runG = longRuns[0];
+    const startG = runG[Math.floor(Math.random() * (runG.length - 1))];
+    map[6][startG] = true; map[6][startG+1] = true;
+
+    // 希少種H: 別の連続区間、なければ richCells 後半に配置
+    if (longRuns.length >= 2) {
+      const runH = longRuns[longRuns.length - 1];
+      const startH = runH[Math.floor(Math.random() * (runH.length - 1))];
+      map[7][startH] = true; map[7][startH+1] = true;
+    } else {
+      const mid = Math.floor(richCells.length / 2);
+      const c1 = richCells[mid], c2 = richCells[Math.min(mid+1, richCells.length-1)];
+      map[7][c1] = true; map[7][c2] = true;
+    }
+
+    if (RARE_SPECIES.every(s => map[s].some(Boolean))) return map;
+  }
+
+  // フォールバック (到達することはほぼない)
+  const map = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(false));
+  [10,10,10,5,5,5].forEach((len,s) => { for(let c=s*3;c<s*3+len&&c<NUM_CELLS;c++) map[s][c]=true; });
+  for(let c=10;c<12;c++) { map[6][c]=true; map[7][c]=true; }
+  return map;
+}
+
+function initGame() {
+  points = TOTAL_POINTS;
+  surveyCounts = Array(NUM_CELLS).fill(0);
+  protected_ = Array(NUM_CELLS).fill(false);
+  revealed = Array.from({length: NUM_SPECIES}, () => Array(NUM_CELLS).fill(null));
+  mode = 'survey';
+  speciesMap = generateMap();
+  document.getElementById('score-section').style.display = 'none';
+  updateModeBtns();
+  render();
+}
+
+function setMode(m) {
+  mode = m;
+  updateModeBtns();
+  const tips = {
+    survey:  '💡 Survey mode: click a cell to check species presence (1 pt). Rare species need a re-survey (2 pt) to confirm.',
+    protect: '💡 Protect mode: click a cell to designate it as a protected area (4 pt).',
+    remove:  '💡 Remove mode: click a protected cell to deselect it (points are not refunded).'
+  };
+  document.getElementById('tip-text').textContent = tips[m];
+}
+
+function updateModeBtns() {
+  ['survey','protect','remove'].forEach(id => {
+    const btn = document.getElementById('btn-'+id);
+    btn.className = 'mode-btn' + (mode===id ? ' active '+id : ' '+id);
+  });
+}
+
+function clickCell(c) {
+  if (mode === 'survey') {
+    // 2回目調査（希少種確認）はSURVEY_RARE_COSTを使用
+    const isSecondSurvey = surveyCounts[c] === 1;
+    const cost = isSecondSurvey ? SURVEY_RARE_COST : SURVEY_COST;
+    if (points < cost) { showMsg(`Not enough points! (${cost} pt needed)`, 'error'); return; }
+    // 3回目以降は無効
+    if (surveyCounts[c] >= SURVEY_RARE_REQUIRED) { showMsg(`Cell ${c+1} has already been re-surveyed.`, 'warn'); return; }
+    points -= cost;
+    surveyCounts[c]++;
+    for (let s = 0; s < NUM_SPECIES; s++) {
+      if (RARE_SPECIES.includes(s)) {
+        revealed[s][c] = surveyCounts[c] >= SURVEY_RARE_REQUIRED ? speciesMap[s][c] : 'maybe';
+      } else {
+        revealed[s][c] = speciesMap[s][c];
+      }
+    }
+    const cnt = surveyCounts[c];
+    const rareHint = cnt===1 && RARE_SPECIES.some(s=>speciesMap[s][c]) ? ` (Rare species possible — re-survey to confirm, costs ${SURVEY_RARE_COST} pt)` : '';
+    showMsg(`Cell ${c+1} surveyed (survey #${cnt}, ${cost} pt used).${rareHint}`, 'info');
+  } else if (mode === 'protect') {
+    if (protected_[c]) { showMsg(`Cell ${c+1} is already protected.`, 'warn'); return; }
+    if (points < PROTECT_COST) { showMsg(`Not enough points! (${PROTECT_COST} pt needed to protect)`, 'error'); return; }
+    points -= PROTECT_COST;
+    protected_[c] = true;
+    showMsg(`Cell ${c+1} added to the protected area.`, 'info');
+  } else {
+    if (!protected_[c]) { showMsg(`Cell ${c+1} is not currently protected.`, 'warn'); return; }
+    protected_[c] = false;
+    showMsg(`Cell ${c+1} removed from the protected area.`, 'warn');
+  }
+  render();
+}
+
+function render() {
+  const ptsEl = document.getElementById('pts');
+  ptsEl.textContent = points;
+  ptsEl.className = 'stat-val ' + (points>=12?'green':points>=5?'amber':'red');
+  document.getElementById('prot-count').textContent = protected_.filter(Boolean).length;
+  const conf = Array.from({length:NUM_SPECIES},(_,s)=>revealed[s].some(v=>v===true)).filter(Boolean).length;
+  document.getElementById('conf-sp').textContent = conf+'/8';
+
+  const row = document.getElementById('cell-row');
+  row.innerHTML = '';
+  for (let c = 0; c < NUM_CELLS; c++) {
+    const div = document.createElement('div');
+    div.className = 'cell'+(surveyCounts[c]>0?' surveyed':'')+(protected_[c]?' protected':'');
+    const icon = protected_[c]?'🛡':(surveyCounts[c]>0?'🔍':'');
+    div.innerHTML = `<span class="cell-num">${c+1}</span><span class="cell-icon">${icon}</span>`;
+    div.onclick = () => clickCell(c);
+    row.appendChild(div);
+  }
+  renderTable();
+}
+
+function renderTable() {
+  const wrap = document.getElementById('table-wrap');
+  let html = '<table class="sp-table"><thead><tr><th class="sp-name">Species \\ Cell</th>';
+  for (let c=0;c<NUM_CELLS;c++) html += `<th>${c+1}</th>`;
+  html += '</tr></thead><tbody>';
+  for (let s=0;s<NUM_SPECIES;s++) {
+    const isRare = RARE_SPECIES.includes(s);
+    html += `<tr${isRare?' class="rare"':''}>`;
+    html += `<td class="sp-name">${isRare?'⭐':''}${spNames[s]}</td>`;
+    for (let c=0;c<NUM_CELLS;c++) {
+      const v = revealed[s][c];
+      if (v===null)       html += `<td class="sp-none">-</td>`;
+      else if (v==='maybe') html += `<td class="sp-maybe">?</td>`;
+      else if (v===true)  html += `<td class="sp-present">○</td>`;
+      else                html += `<td class="sp-absent">×</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function showResult() {
+  const sec = document.getElementById('score-section');
+  sec.style.display = 'block';
+
+  let totalScore = 0;
+  const spDetail = [];
+  for (let s=0;s<NUM_SPECIES;s++) {
+    const protCount = protected_.reduce((n,p,c) => n+(p&&speciesMap[s][c]?1:0), 0);
+    const spPt = SP_POINTS[s];
+    const contrib = protCount * spPt;
+    totalScore += contrib;
+    spDetail.push({ name:spNames[s], isRare:RARE_SPECIES.includes(s), protCount, range:speciesMap[s].filter(Boolean).length, spPt, contrib });
+  }
+
+  const maxPossible = spDetail.reduce((n,d)=>n+d.range*d.spPt, 0);
+  const pct = Math.round(totalScore / maxPossible * 100);
+
+  const [, msgClass, msgText] = (
+    pct>=80 ? ['','good','Excellent! You masterfully balanced surveying and protecting. Even the rare species are covered.'] :
+    pct>=60 ? ['','good','Great plan! Most species are well protected within your reserve.'] :
+    pct>=40 ? ['','mid', 'Decent result. Try fine-tuning the balance between surveying costs and protected area.'] :
+    pct>=20 ? ['','mid', 'There is still room to improve the coverage.'] :
+              ['','low', 'Coverage is too low. Try surveying a few cells first to map distributions before committing to protection.']
+  );
+
+  let html = `<h2>📊 Results</h2>`;
+  html += `<div class="score-stats">`;
+  html += `<div class="stat"><div class="stat-label">Total score</div><div class="stat-val ${pct>=60?'green':pct>=30?'amber':'red'}">${totalScore}</div></div>`;
+  html += `<div class="stat"><div class="stat-label">% of max possible</div><div class="stat-val">${pct}%</div></div>`;
+  html += `<div class="stat"><div class="stat-label">Protected cells</div><div class="stat-val blue">${protected_.filter(Boolean).length}</div></div>`;
+  html += `<div class="stat"><div class="stat-label">Points used</div><div class="stat-val">${TOTAL_POINTS-points}</div></div>`;
+  html += `</div>`;
+
+  html += `<table class="sp-result-table"><thead><tr>`;
+  html += `<th>Species</th><th>Pts/cell</th><th>Range (cells)</th><th>Cells protected</th><th>Score contribution</th>`;
+  html += `</tr></thead><tbody>`;
+  for (const d of spDetail) {
+    html += `<tr${d.isRare?' class="rare"':''}>`;
+    html += `<td>${d.isRare?'⭐':''}${d.name}</td>`;
+    html += `<td>${d.spPt} pt</td>`;
+    html += `<td>${d.range}</td>`;
+    html += `<td style="color:${d.protCount>0?'#0a6641':'#a32d2d'};font-weight:500">${d.protCount}</td>`;
+    html += `<td style="font-weight:500">${d.contrib} pt</td>`;
+    html += `</tr>`;
+  }
+  html += `</tbody></table>`;
+  html += `<div class="score-msg ${msgClass}">${msgText}</div>`;
+
+  html += `<div class="truth-label">🗺 True distribution (all cells revealed) — blue = protected cell / green = species present in protected cell</div>`;
+  html += `<div class="truth-wrap"><table class="truth-table"><thead><tr>`;
+  html += `<th class="sp-name">Species \\ Cell</th>`;
+  for (let c=0;c<NUM_CELLS;c++) {
+    const bg = protected_[c] ? ' style="background:#ddeaf8"' : '';
+    html += `<th${bg}>${c+1}</th>`;
+  }
+  html += `</tr></thead><tbody>`;
+  for (let s=0;s<NUM_SPECIES;s++) {
+    const isRare = RARE_SPECIES.includes(s);
+    html += `<tr${isRare?' class="rare"':''}>`;
+    html += `<td class="sp-name">${isRare?'⭐':''}${spNames[s]}</td>`;
+    for (let c=0;c<NUM_CELLS;c++) {
+      const present = speciesMap[s][c];
+      const prot = protected_[c];
+      let bg = prot && present ? ' style="background:#b6dfc8"' : prot ? ' style="background:#ddeaf8"' : '';
+      html += `<td class="${present?'sp-present':'sp-absent'}"${bg}>${present?'○':'×'}</td>`;
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table></div>`;
+
+  html += `<div style="margin-top:16px;display:flex;gap:8px">`;
+  html += `<button class="btn primary" onclick="resetGame()">↺ Play again</button>`;
+  html += `</div>`;
+
+  sec.innerHTML = html;
+  sec.scrollIntoView({behavior:'smooth'});
+}
+
+let msgTimer;
+function showMsg(text, type) {
+  const el = document.getElementById('msg-area');
+  el.innerHTML = `<div class="msg ${type}">${text}</div>`;
+  clearTimeout(msgTimer);
+  msgTimer = setTimeout(()=>el.innerHTML='', 3500);
+}
+
+function resetGame() {
+  if (!confirm('Reset the game? Species distributions will be randomised again.')) return;
+  initGame();
+}
+
+initGame();
+</script>
+</body>
+</html>
